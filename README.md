@@ -21,6 +21,7 @@ app: open the page, plug in the quad, start talking.
 - [What it can do](#what-it-can-do)
 - [Try it without a quad](#try-it-without-a-quad)
 - [Getting started](#getting-started)
+- [Run it locally with Docker](#run-it-locally-with-docker)
 - [Deploying it](#deploying-it)
 - [How it works](#how-it-works)
 - [Blackbox support](#blackbox-support)
@@ -208,6 +209,61 @@ Then, in a Chromium browser:
 
 ---
 
+## Run it locally with Docker
+
+The repository ships a two-stage image: Node builds the bundle, nginx serves it.
+Nothing else runs — there is no backend to host.
+
+```bash
+docker compose up -d          # http://localhost:8080
+docker compose logs -f        # follow
+docker compose down           # stop
+```
+
+Change the port with `COPILOT_PORT=3000 docker compose up -d`.
+
+`http://localhost` is a secure context as far as browsers are concerned, so Web
+Serial works over plain HTTP there — no certificate needed for normal local use.
+
+### Reaching it from another machine
+
+Plain HTTP on a LAN address is *not* a secure context, so Web Serial is
+unavailable and the Connect button will not work. Turn on the optional HTTPS
+listener, which generates a self-signed certificate on first start:
+
+```bash
+COPILOT_TLS=on COPILOT_TLS_HOST=workshop.local docker compose up -d
+# https://workshop.local:8443
+```
+
+The browser will warn about the certificate once; accept the exception and Web
+Serial works. The certificate lives in a named volume, so restarting the
+container does not invalidate the exception you granted.
+
+One honest caveat: Chromium refuses to register a service worker behind an
+untrusted certificate. Over self-signed HTTPS the app runs and Web Serial works,
+but PWA install and offline loading do not until the certificate is actually
+trusted by the machine. Over `http://localhost` everything works, service
+worker included.
+
+### Without compose
+
+```bash
+docker build -t betaflight-ai-copilot .
+docker run -d -p 8080:80 --name copilot betaflight-ai-copilot
+```
+
+### Without Docker
+
+`npm run build` produces `dist/`, which any static server will host:
+
+```bash
+npm run build
+npx serve dist          # or: python3 -m http.server -d dist 8080
+```
+
+---
+
 ## Deploying it
 
 The build output is a static directory — host it anywhere.
@@ -224,6 +280,7 @@ Web Serial requires a secure context, so serve over HTTPS (or `localhost`).
   `dist`.
 - **Any static host** — `vite.config.ts` sets `base: "./"`, so the app works
   from a subdirectory without configuration.
+- **Self-hosted** — see [Run it locally with Docker](#run-it-locally-with-docker).
 - **Installable** — it ships a web app manifest and a service worker, so
   browsers offer to install it, and the shell loads offline.
 
@@ -279,6 +336,7 @@ Layout:
 | `src/ai/prompts.ts` | system prompt and the Betaflight reference the model reads |
 | `src/blackbox/` | `.bbl` decoder, CSV reader, FFT and statistics |
 | `src/components/` | Vue components |
+| `docker/` | nginx config and the optional self-signed TLS entrypoint |
 
 ---
 

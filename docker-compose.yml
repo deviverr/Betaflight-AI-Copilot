@@ -1,0 +1,23 @@
+services:
+  copilot:
+    build: .
+    image: betaflight-ai-copilot
+    container_name: betaflight-ai-copilot
+    ports:
+      - "${COPILOT_PORT:-8080}:80"
+      # Only serves anything when COPILOT_TLS=on.
+      - "${COPILOT_TLS_PORT:-8443}:443"
+    environment:
+      # "on" adds an HTTPS listener with a self-signed certificate, which is
+      # only needed to reach the app from another machine. http://localhost is
+      # already a secure context, so Web Serial works over plain HTTP there.
+      COPILOT_TLS: "${COPILOT_TLS:-off}"
+      COPILOT_TLS_HOST: "${COPILOT_TLS_HOST:-localhost}"
+    restart: unless-stopped
+    volumes:
+      # Keeps the generated certificate across restarts, so the browser
+      # exception you granted is not invalidated every time.
+      - copilot-certs:/etc/nginx/certs
+
+volumes:
+  copilot-certs:
