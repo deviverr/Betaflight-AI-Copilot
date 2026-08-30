@@ -25,3 +25,12 @@ completeOAuth()
   .finally(() => {
     createApp(App).mount("#app");
   });
+
+if (import.meta.env.DEV) {
+  // Development affordance: lets the screenshot tooling and manual debugging
+  // drive the app without a flight controller or an AI account. Stripped from
+  // production builds by the `import.meta.env.DEV` guard.
+  void import("./core/store").then((store) => {
+    (window as unknown as Record<string, unknown>).copilot = store;
+  });
+}

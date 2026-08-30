@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { readTag2_3S32, readTag8_4S16, parseHeader, decodeLog, UnsupportedEncodingError } from "../src/blackbox/decoder";
+import { readTag2_3S32, readTag8_4S16, parseHeader, decodeLog } from "../src/blackbox/decoder";
 import { fft, findNoisePeaks, analyzeCsv } from "../src/blackbox/analyze";
 
 function stream(bytes: number[]) {
@@ -103,17 +103,40 @@ describe("decodeLog", () => {
     expect(log.rows[1]).toEqual([1, 1125, 2]);
   });
 
-  it("refuses a log that uses TAG2_3SVARIABLE rather than guessing its layout", () => {
+  it("decodes the TAG2_3SVARIABLE gyro layout Betaflight 4.x writes", () => {
     const header =
       "H Field I name:gyroADC[0],gyroADC[1],gyroADC[2]\n" +
       "H Field I signed:1,1,1\n" +
       "H Field I predictor:0,0,0\n" +
       "H Field I encoding:0,0,0\n" +
-      "H Field P predictor:3,3,3\n" +
+      "H Field P predictor:1,1,1\n" +
       "H Field P encoding:10,10,10\n";
-    const bytes = new Uint8Array(new TextEncoder().encode(header));
-    expect(() => decodeLog(bytes)).toThrow(UnsupportedEncodingError);
-    expect(() => decodeLog(bytes)).toThrow(/CSV/);
+    // I frame: three SIGNED_VB zigzag values -> 5, -3, 2
+    // P frame: TAG2_3SVARIABLE selector 0 (2 bits each) -> 1, -1, -2, added to
+    // the previous frame by the PREVIOUS predictor.
+    const body = [0x49, 0x0a, 0x05, 0x04, 0x50, 0b00_01_11_10];
+    const bytes = new Uint8Array([...new TextEncoder().encode(header), ...body]);
+
+    const log = decodeLog(bytes);
+    expect(log.rows).toHaveLength(2);
+    expect(log.rows[0]).toEqual([5, -3, 2]);
+    expect(log.rows[1]).toEqual([6, -4, 0]);
+  });
+
+  it("refuses an encoding it does not recognise rather than guessing", () => {
+    const header =
+      "H Field I name:gyroADC[0]\n" +
+      "H Field I signed:1\n" +
+      "H Field I predictor:0\n" +
+      "H Field I encoding:42\n" +
+      "H Field P predictor:1\n" +
+      "H Field P encoding:42\n";
+    const bytes = new Uint8Array([...new TextEncoder().encode(header), 0x49, 0x00]);
+    // The frame decode throws, the frame is counted as corrupt, and no rows
+    // of invented data are produced.
+    const log = decodeLog(bytes);
+    expect(log.rows).toHaveLength(0);
+    expect(log.corruptFrames).toBeGreaterThan(0);
   });
 });
 

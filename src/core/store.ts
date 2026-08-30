@@ -5,6 +5,7 @@
  */
 import { reactive, computed, ref, shallowRef } from "vue";
 import { FcLink, CliCommandError } from "../msp/connection";
+import { SimulatedFlightController } from "../msp/simulator";
 import { parseConfig, summarizeForModel, type BetaflightConfig } from "./config";
 import { toCliCommands, renderDiff, type ChangeSet } from "./changeset";
 import { decide, isArmed, type PermissionMode } from "./permissions";
@@ -54,6 +55,8 @@ export const state = reactive({
   linkMode: "closed" as "closed" | "msp" | "cli",
   identity: null as null | Record<string, string>,
   connectionError: "",
+  /** True when the board on the other end is the built-in simulator. */
+  demo: false,
 
   // Configuration
   config: null as BetaflightConfig | null,
@@ -121,10 +124,34 @@ export function clearTranscript(): void {
 // -------------------------------------------------------------- connection
 
 export async function connect(): Promise<void> {
+  state.demo = false;
+  await openLink();
+}
+
+/**
+ * Connects to the built-in simulated flight controller. Everything downstream —
+ * MSP framing, CLI parsing, change sets, approvals — runs exactly as it does
+ * against hardware; only the serial port is simulated.
+ */
+export async function connectDemo(): Promise<void> {
+  state.demo = true;
+  simulator = new SimulatedFlightController();
+  await openLink(simulator as unknown as SerialPort);
+  if (state.connected) {
+    pushSystem(
+      "Demo mode: this is a simulated 5-inch 6S freestyle build, not a real aircraft. " +
+        "Changes are applied to the simulation and nothing is written to hardware.",
+    );
+  }
+}
+
+let simulator: SimulatedFlightController | null = null;
+
+async function openLink(port?: SerialPort): Promise<void> {
   state.connecting = true;
   state.connectionError = "";
   try {
-    const identity = await link.connect();
+    const identity = await link.connect(undefined, port);
     state.identity = { ...identity };
     state.connected = true;
     pushSystem(
@@ -150,6 +177,8 @@ export async function connect(): Promise<void> {
 export async function disconnect(): Promise<void> {
   await link.disconnect();
   state.connected = false;
+  state.demo = false;
+  simulator = null;
   state.identity = null;
   state.config = null;
 }
@@ -179,6 +208,16 @@ async function ensureCli(): Promise<void> {
  * the board, which drops the USB device for a second or two.
  */
 async function reconnectAfterReboot(): Promise<void> {
+  if (state.demo) {
+    // The simulator closes its stream on save, standing in for a board that
+    // reboots and re-enumerates. A fresh instance is the reconnected device.
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    await link.disconnect().catch(() => {});
+    simulator = new SimulatedFlightController();
+    await link.connect(undefined, simulator as unknown as SerialPort);
+    state.connected = true;
+    return;
+  }
   await new Promise((resolve) => setTimeout(resolve, 3000));
   const ports = await navigator.serial.getPorts();
   for (let attempt = 0; attempt < 6; attempt++) {

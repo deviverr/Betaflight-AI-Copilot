@@ -49,7 +49,21 @@ export async function analyzeFile(file: File): Promise<BlackboxAnalysis> {
   }
   const bytes = new Uint8Array(await file.arrayBuffer());
   try {
-    return analyzeDecoded(file.name, decodeLog(bytes));
+    const log = decodeLog(bytes);
+    // A log whose frames all failed to decode carries no usable statistics, so
+    // fall back to the header rather than reporting an empty analysis as if it
+    // were a quiet flight.
+    if (!log.rows.length) {
+      return headerOnlyAnalysis(
+        file.name,
+        bytes,
+        log.corruptFrames
+          ? `None of the ${log.corruptFrames} frames in this log could be decoded. ` +
+              "Export it to CSV with `blackbox_decode` or Betaflight Blackbox Explorer and load that instead."
+          : "This log contains no data frames.",
+      );
+    }
+    return analyzeDecoded(file.name, log);
   } catch (error) {
     if (error instanceof UnsupportedEncodingError) {
       return headerOnlyAnalysis(file.name, bytes, error.message);

@@ -182,13 +182,23 @@ export function toCliCommands(changeSet: ChangeSet, options: { save?: boolean } 
   return commands;
 }
 
+export interface DiffLine {
+  scope: string;
+  text: string;
+  risk: Risk;
+  /** True when the board already holds this value, so nothing will be written. */
+  unchanged: boolean;
+}
+
 /** Human-readable diff lines for the approval panel. */
-export function renderDiff(changeSet: ChangeSet): { scope: string; text: string; risk: Risk }[] {
+export function renderDiff(changeSet: ChangeSet): DiffLine[] {
   return changeSet.changes.map((change) => ({
     scope: scopeKey(change.scope),
     risk: change.risk,
-    text:
-      change.kind === "set"
+    unchanged: isNoop(change),
+    text: isNoop(change)
+      ? `${change.key}: ${change.newValue}`
+      : change.kind === "set"
         ? `${change.key}: ${change.oldValue ?? "(default)"} → ${change.newValue}`
         : change.kind === "feature"
           ? `feature ${change.key.toUpperCase()} → ${change.newValue}`

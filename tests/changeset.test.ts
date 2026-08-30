@@ -136,3 +136,18 @@ describe("riskOf and renderDiff", () => {
     expect(renderDiff(changeSet)[0].text).toBe("p_pitch: 47 → 52");
   });
 });
+
+describe("renderDiff no-op handling", () => {
+  it("marks a value the board already holds as unchanged", () => {
+    const changeSet = newChangeSet("mixed", "", [
+      resolveChange(config, { kind: "set", key: "p_pitch", value: "47" }),
+      resolveChange(config, { kind: "set", key: "p_pitch", value: "52" }),
+    ]);
+    const [already, changing] = renderDiff(changeSet);
+
+    expect(already.unchanged).toBe(true);
+    expect(already.text).toBe("p_pitch: 47");
+    expect(changing.unchanged).toBe(false);
+    expect(changing.text).toBe("p_pitch: 47 → 52");
+  });
+});

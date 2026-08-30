@@ -14,6 +14,8 @@ const props = defineProps<{
 const emit = defineEmits<{ approve: []; reject: [] }>();
 
 const rows = computed(() => renderDiff(props.changeSet));
+/** How many rows would actually be written, so a no-op set can say so. */
+const writeCount = computed(() => rows.value.filter((row) => !row.unchanged).length);
 const reasons = computed(() => props.changeSet.changes.map((change) => change.reason));
 const commands = computed(() => toCliCommands(props.changeSet).join("\n"));
 const showCli = defineModel<boolean>("showCli", { default: false });
@@ -42,14 +44,22 @@ const statusLabel: Record<ApprovalStatus, string> = {
 
     <ul class="diff-list">
       <template v-for="(row, index) in rows" :key="index">
-        <li>
+        <li :class="{ unchanged: row.unchanged }">
           <span class="scope">{{ row.scope }}</span>
           <span>{{ row.text }}</span>
-          <span class="badge" :class="row.risk">{{ row.risk }}</span>
+          <span class="badge" :class="row.unchanged ? '' : row.risk">
+            {{ row.unchanged ? "already set" : row.risk }}
+          </span>
         </li>
-        <li v-if="reasons[index]"><span></span><span class="reason">{{ reasons[index] }}</span></li>
+        <li v-if="reasons[index]" :class="{ unchanged: row.unchanged }">
+          <span></span><span class="reason">{{ reasons[index] }}</span>
+        </li>
       </template>
     </ul>
+
+    <p v-if="writeCount === 0" class="summary">
+      Every value here is already set on the board. Approving this writes nothing.
+    </p>
 
     <pre v-if="showCli">{{ commands }}</pre>
 

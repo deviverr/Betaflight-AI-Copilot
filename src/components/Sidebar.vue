@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, onMounted } from "vue";
 import {
-  state, providers, activeProvider, connect, disconnect, refreshConfig,
+  state, providers, activeProvider, connect, connectDemo, disconnect, refreshConfig,
   selectProvider, loginProvider, setModel, setMode, restoreBackup, loadBlackbox,
 } from "../core/store";
 import { MODES } from "../core/permissions";
@@ -67,12 +67,23 @@ function removeBackup(id: string): void {
 
       <div class="row">
         <span class="status-dot" :class="{ on: state.connected }"></span>
-        <span class="grow">{{ state.connected ? state.linkMode.toUpperCase() : "Disconnected" }}</span>
+        <span class="grow">
+          {{ state.connected ? state.linkMode.toUpperCase() : "Disconnected" }}
+        </span>
+        <span v-if="state.demo" class="badge moderate">demo</span>
         <button v-if="!state.connected" class="primary" :disabled="!serialSupported || state.connecting" @click="connect">
           {{ state.connecting ? "Connecting…" : "Connect" }}
         </button>
         <button v-else class="ghost" @click="disconnect">Disconnect</button>
       </div>
+
+      <button v-if="!state.connected" :disabled="state.connecting" @click="connectDemo">
+        Try the demo — no hardware needed
+      </button>
+      <p v-if="!state.connected" class="hint">
+        The demo is a simulated 5-inch 6S freestyle build. Everything works as it does on a real
+        board; nothing is written to hardware.
+      </p>
 
       <dl v-if="state.identity" class="kv">
         <dt>Firmware</dt><dd>{{ state.identity.variant }} {{ state.identity.firmwareVersion }}</dd>
@@ -93,7 +104,7 @@ function removeBackup(id: string): void {
         <span v-if="state.config" class="badge">{{ state.config.master.size }} settings</span>
       </div>
 
-      <p class="hint">
+      <p v-if="!state.demo" class="hint">
         Close Betaflight Configurator first — only one page can hold the serial port at a time.
       </p>
     </section>

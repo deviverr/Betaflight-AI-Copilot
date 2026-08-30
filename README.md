@@ -5,26 +5,8 @@ controller over Web Serial, reads the real configuration off the board, and
 tunes it by conversation — showing you a diff of every change before it writes
 anything.
 
-```
-"I get propwash on fast descents and the motors run warm after a pack."
+![The copilot proposing a change, with a reviewable diff and the exact CLI behind it](docs/screenshots/03-proposal.png)
 
-  ✓ read_config          Read configuration (61 master settings)
-  ✓ analyze_blackbox     Analysed blackbox log
-
-  ┌─ Reduce propwash without cooking the motors ──────── waiting for you ─┐
-  │ Raising D on both axes with a matching D_max ceiling, and lifting the │
-  │ D-term lowpass so the extra D is not fighting filter delay.           │
-  │                                                                       │
-  │ profile 0   d_pitch: 40 → 46                               [safe]     │
-  │             more damping through the descent                          │
-  │ profile 0   d_max_pitch: 55 → 62                           [safe]     │
-  │             lets D reach further on fast stops only                   │
-  │ master      dterm_lpf1_dyn_max_hz: 145 → 170               [safe]     │
-  │             less filter delay so the added D actually lands           │
-  │                                                                       │
-  │ Backup taken first.          [ Reject ]  [ Apply & save ]              │
-  └───────────────────────────────────────────────────────────────────────┘
-```
 
 No installer, no backend, no API key required. It is a static progressive web
 app: open the page, plug in the quad, start talking.
@@ -37,10 +19,11 @@ app: open the page, plug in the quad, start talking.
 - [Signing in to an AI without an API key](#signing-in-to-an-ai-without-an-api-key)
 - [Safety model](#safety-model)
 - [What it can do](#what-it-can-do)
+- [Try it without a quad](#try-it-without-a-quad)
 - [Getting started](#getting-started)
 - [Deploying it](#deploying-it)
 - [How it works](#how-it-works)
-- [Blackbox support and its limits](#blackbox-support-and-its-limits)
+- [Blackbox support](#blackbox-support)
 - [Development](#development)
 - [Privacy](#privacy)
 - [Disclaimer](#disclaimer)
@@ -180,6 +163,29 @@ the app does not know is exactly the one not to auto-apply.
 - **Back up and restore.** Every write is preceded by a snapshot; snapshots can
   be downloaded as ordinary Betaflight CLI dumps.
 - **Live telemetry.** Voltage, current, mAh, RSSI, gyro loop time, I2C errors.
+- **Run without hardware.** A built-in simulated flight controller, for trying it
+  out or for development.
+
+---
+
+## Try it without a quad
+
+Click **Try the demo — no hardware needed** in the sidebar. It connects to a
+simulated flight controller built into the app: an ordinary 5-inch 6S freestyle
+build, with a few deliberately imperfect settings for the copilot to find.
+
+The simulator speaks real MSP framing and real CLI grammar behind a Web
+Serial-shaped port, so every layer above it runs exactly as it does against
+hardware — the same parser, the same risk classification, the same approval
+gate, the same reboot-and-reconnect after a save. Only the wire is fake.
+
+It is also how the screenshots in this README are produced (`npm run
+screenshots`), which is why they show real output rather than a mockup.
+
+| | |
+|---|---|
+| ![Connected to the simulated board](docs/screenshots/02-connected.png) | ![The exact CLI behind the diff](docs/screenshots/04-cli.png) |
+| Connected, configuration read | "Show CLI" — note that the two values already set are excluded from the write |
 
 ---
 
@@ -262,6 +268,7 @@ Layout:
 | Path | What lives there |
 |---|---|
 | `src/msp/` | MSP v1/v2 framing, Web Serial transport, CLI channel |
+| `src/msp/simulator.ts` | the simulated flight controller behind the demo |
 | `src/core/config.ts` | `diff all` parser with master / profile / rateprofile scoping |
 | `src/core/changeset.ts` | risk classification and CLI command generation |
 | `src/core/permissions.ts` | permission modes and the decision rules |
@@ -275,25 +282,38 @@ Layout:
 
 ---
 
-## Blackbox support and its limits
+## Blackbox support
 
-Two paths, and the difference matters:
+Two input paths, both fully supported:
 
-- **CSV** — exported by `blackbox_decode` or Betaflight Blackbox Explorer.
-  **Fully supported.** All statistics and the noise spectrum are computed.
-- **`.bbl` / `.bfl` binary** — the header is always parsed (firmware, craft,
-  rates, PIDs, filter settings, looptime). Frames are decoded when the log uses
-  the encodings this decoder implements bit-exactly: `SIGNED_VB`,
-  `UNSIGNED_VB`, `NEG_14BIT`, `TAG8_8SVB`, `TAG2_3S32`, `TAG8_4S16`, `NULL`.
+- **`.bbl` / `.bfl` binary** — parsed directly in the browser. The decoder
+  implements every encoding Betaflight emits for main frames: `SIGNED_VB`,
+  `UNSIGNED_VB`, `NEG_14BIT`, `TAG8_8SVB`, `TAG2_3S32`, `TAG8_4S16`,
+  `TAG2_3SVARIABLE` and `NULL`, with the twelve predictors main frames use
+  (GPS frames are skipped rather than decoded).
+- **CSV** — as exported by `blackbox_decode` or Betaflight Blackbox Explorer.
 
-Betaflight 4.x encodes gyro P-frames with `TAG2_3SVARIABLE`, whose selector
-layouts this decoder does **not** implement. Rather than emit plausible-looking
-but wrong numbers into a tuning decision, the loader **refuses that log**, keeps
-the header analysis, and asks for a CSV export. This is deliberate: a silently
-wrong noise spectrum is worse than no noise spectrum.
+The bit layouts follow `blackboxWriteTag2_3S32`, `blackboxWriteTag8_4S16` and
+`blackboxWriteTag2_3SVariable` in Betaflight's
+`src/main/blackbox/blackbox_encoding.c`. Rather than trust that reading, the
+test suite ports those three encoders to TypeScript and round-trips every
+layout boundary and several thousand random values through them
+(`tests/blackbox-roundtrip.test.ts`). An encoding outside that set is refused
+rather than guessed at, and the app falls back to header-only analysis.
 
-Implementing `TAG2_3SVARIABLE` against the upstream encoder is a good
-contribution — see `src/blackbox/decoder.ts`.
+### One thing worth knowing about your logs
+
+The round-trip tests turned up a defect in Betaflight's own encoder, not in
+this decoder. `blackboxWriteTag2_3SVariable` escapes to its wide layout at
+`|field0| >= 256` and `|field1|, |field2| >= 128`, but its 877 layout only
+gives field 0 eight signed bits and fields 1 and 2 seven signed bits. Values
+between those thresholds are truncated **when the log is written, on the
+flight controller** — 100 is stored and read back as −28.
+
+Nothing a reader can do recovers a value the writer discarded, so this decoder
+reproduces exactly what was written, and the affected band is documented in a
+test so it stays visible. In practice it affects a narrow range of gyro deltas
+and does not change the shape of a noise spectrum.
 
 ---
 
@@ -301,10 +321,11 @@ contribution — see `src/blackbox/decoder.ts`.
 
 ```bash
 npm run dev         # dev server with hot reload
-npm test            # 99 tests
+npm test            # 123 tests
 npm run test:watch
 npm run typecheck   # vue-tsc, strict
 npm run build
+npm run screenshots # regenerate docs/screenshots from the running dev server
 ```
 
 The test suite covers the parts where being wrong is expensive:
@@ -317,12 +338,17 @@ The test suite covers the parts where being wrong is expensive:
 | `tests/changeset.test.ts` | risk classification, CLI generation and profile-switch ordering, no-op elision |
 | `tests/permissions.test.ts` | every mode against every risk tier |
 | `tests/agent.test.ts` | the tool loop, tool-result feedback, iteration cap, write refusals |
-| `tests/blackbox.test.ts` | frame encodings, header parsing, FFT, peak finding, CSV statistics |
+| `tests/blackbox.test.ts` | header parsing, frame decoding with predictors, FFT, peak finding, CSV statistics |
+| `tests/blackbox-roundtrip.test.ts` | every tag encoding round-tripped against a port of Betaflight's own encoder |
+| `tests/simulator.test.ts` | the demo board driven through the real link: handshake, diff, `set`, batch abort, save |
 | `tests/ui.test.ts` | component rendering, approval buttons, wizard output |
 
-There is no hardware in CI, so `tests/link.test.ts` drives the real `FcLink`
-against a fake flight controller implemented behind a Web Serial-shaped port —
-real framing, real CLI completion detection, real error paths.
+There is no hardware in CI, so `tests/link.test.ts` and `tests/simulator.test.ts`
+drive the real `FcLink` against flight controllers implemented behind a Web
+Serial-shaped port — real framing, real CLI completion detection, real error
+paths. Two bugs in this repository were found that way: an infinite loop in the
+serial read pump when a device closes its stream, and a CLI error pattern that
+did not match Betaflight's `###ERROR:###` format.
 
 ---
 

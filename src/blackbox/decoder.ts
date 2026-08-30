@@ -1,22 +1,24 @@
 /**
  * Betaflight blackbox (.bbl / .bfl) reader.
  *
- * Scope note, deliberately narrow: the header is parsed in full, and frame
- * decoding implements the encodings whose bit layout is unambiguous
- * (SIGNED_VB, UNSIGNED_VB, NEG_14BIT, TAG8_8SVB, TAG2_3S32, TAG8_4S16, NULL).
+ * Implements every encoding Betaflight emits for main frames: SIGNED_VB,
+ * UNSIGNED_VB, NEG_14BIT, TAG8_8SVB, TAG2_3S32, TAG8_4S16, TAG2_3SVARIABLE and
+ * NULL. The bit layouts follow `blackboxWriteTag2_3S32`,
+ * `blackboxWriteTag8_4S16` and `blackboxWriteTag2_3SVariable` in Betaflight's
+ * `src/main/blackbox/blackbox_encoding.c`, and the test suite verifies each one
+ * by round-tripping against a direct port of that encoder.
  *
- * Betaflight 4.x encodes gyro P-frames with TAG2_3SVARIABLE, whose selector
- * layouts this decoder does not implement. Rather than emit plausible-looking
- * but wrong numbers, `decodeLog` throws `UnsupportedEncodingError` and the UI
- * asks for a CSV export instead. Header-only analysis still works for such logs.
+ * An encoding outside that set throws `UnsupportedEncodingError` rather than
+ * producing plausible-looking but wrong numbers, and the UI falls back to
+ * header-only analysis plus a request for a CSV export.
  */
 
 export class UnsupportedEncodingError extends Error {
   constructor(readonly encoding: number, readonly field: string) {
     super(
-      `This log encodes "${field}" with blackbox encoding ${encoding}, which this in-browser ` +
-        "decoder does not implement bit-exactly. Export the log to CSV with `blackbox_decode` " +
-        "or Betaflight Blackbox Explorer and load the CSV instead — everything else works the same.",
+      `This log encodes "${field}" with blackbox encoding ${encoding}, which this decoder does ` +
+        "not recognise — it is newer than the encodings Betaflight documents. Export the log to " +
+        "CSV with `blackbox_decode` or Betaflight Blackbox Explorer and load the CSV instead.",
     );
     this.name = "UnsupportedEncodingError";
   }
@@ -116,7 +118,9 @@ class ByteStream {
 
 const signExtend2 = (v: number) => (v & 0x02 ? v | ~0x03 : v);
 const signExtend4 = (v: number) => (v & 0x08 ? v | ~0x0f : v);
+const signExtend5 = (v: number) => (v & 0x10 ? v | ~0x1f : v);
 const signExtend6 = (v: number) => (v & 0x20 ? v | ~0x3f : v);
+const signExtend7 = (v: number) => (v & 0x40 ? v | ~0x7f : v);
 const signExtend8 = (v: number) => (v << 24) >> 24;
 const signExtend14 = (v: number) => (v & 0x2000 ? v | ~0x3fff : v);
 const signExtend16 = (v: number) => (v << 16) >> 16;
@@ -213,15 +217,6 @@ export function decodeLog(data: Uint8Array, options: { maxFrames?: number } = {}
   const { header, bodyOffset } = parseHeader(data);
   const fields = header.mainFields;
   if (!fields.length) throw new Error("This file has no blackbox field definitions in its header.");
-
-  // Fail fast and clearly instead of decoding a layout we cannot guarantee.
-  for (const field of fields) {
-    for (const encoding of [field.iencoding, field.pencoding]) {
-      if (encoding === Encoding.TAG2_3SVARIABLE) {
-        throw new UnsupportedEncodingError(encoding, field.name);
-      }
-    }
-  }
 
   const stream = new ByteStream(data.subarray(bodyOffset));
   const rows: number[][] = [];
@@ -351,6 +346,13 @@ function readFrame(
         const four = readTag8_4S16(stream);
         for (let i = 0; i < 4 && index + i < fields.length; i++) values[index + i] = four[i];
         index += 4;
+        break;
+      }
+
+      case Encoding.TAG2_3SVARIABLE: {
+        const three = readTag2_3SVariable(stream);
+        for (let i = 0; i < 3 && index + i < fields.length; i++) values[index + i] = three[i];
+        index += 3;
         break;
       }
 
@@ -505,6 +507,74 @@ export function readTag8_4S16(
       }
     }
     selector >>= 2;
+  }
+  return values;
+}
+
+/**
+ * TAG2_3SVARIABLE: three signed values packed into the smallest of four
+ * layouts, chosen by the top two bits of the lead byte. Mirrors
+ * `blackboxWriteTag2_3SVariable` exactly.
+ *
+ *   0  2 bits per field    ss11 2233
+ *   1  554 bits per field  ss11 1112 2222 3333
+ *   2  877 bits per field  ss11 1111 1122 2222 2333 3333
+ *   3  per-field widths    sstt tttt, then 1-4 little-endian bytes per field
+ */
+export function readTag2_3SVariable(
+  stream: ByteStream | { byte(): number },
+): [number, number, number] {
+  const lead = stream.byte();
+  const values: [number, number, number] = [0, 0, 0];
+
+  switch (lead >> 6) {
+    case 0:
+      values[0] = signExtend2((lead >> 4) & 0x03);
+      values[1] = signExtend2((lead >> 2) & 0x03);
+      values[2] = signExtend2(lead & 0x03);
+      break;
+
+    case 1: {
+      const second = stream.byte();
+      values[0] = signExtend5((lead >> 1) & 0x1f);
+      values[1] = signExtend5(((lead & 0x01) << 4) | (second >> 4));
+      values[2] = signExtend4(second & 0x0f);
+      break;
+    }
+
+    case 2: {
+      const second = stream.byte();
+      const third = stream.byte();
+      values[0] = signExtend8(((lead & 0x3f) << 2) | (second >> 6));
+      values[1] = signExtend7(((second & 0x3f) << 1) | (third >> 7));
+      values[2] = signExtend7(third & 0x7f);
+      break;
+    }
+
+    default: {
+      // The low six bits hold a width per field, two bits each, first field in
+      // the low bits: 0 = 1 byte, 1 = 2 bytes, 2 = 3 bytes, 3 = 4 bytes.
+      let widths = lead & 0x3f;
+      for (let i = 0; i < 3; i++) {
+        switch (widths & 0x03) {
+          case 0:
+            values[i] = signExtend8(stream.byte());
+            break;
+          case 1:
+            values[i] = signExtend16(stream.byte() | (stream.byte() << 8));
+            break;
+          case 2:
+            values[i] = signExtend24(stream.byte() | (stream.byte() << 8) | (stream.byte() << 16));
+            break;
+          default:
+            values[i] =
+              (stream.byte() | (stream.byte() << 8) | (stream.byte() << 16) | (stream.byte() << 24)) | 0;
+            break;
+        }
+        widths >>= 2;
+      }
+      break;
+    }
   }
   return values;
 }

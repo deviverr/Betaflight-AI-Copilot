@@ -253,6 +253,7 @@ pre {
   font-size: 12.5px;
 }
 .diff-list .scope { color: var(--text-dim); }
+.diff-list li.unchanged { opacity: 0.5; }
 .diff-list .reason { grid-column: 2 / -1; color: var(--text-dim); font-family: var(--sans); font-size: 12px; }
 
 .changeset footer {

@@ -75,7 +75,8 @@ function startWizard(prompt: string): void {
         <div v-if="!state.transcript.length" class="entry system">
           Connect your flight controller and an AI provider, then describe how the quad flies.
           The copilot reads the configuration itself and proposes changes you approve.
-          Props off for anything it writes.
+          Props off for anything it writes. No quad to hand? Use
+          <strong>Try the demo</strong> in the sidebar for a simulated board.
         </div>
 
         <template v-for="entry in state.transcript" :key="entry.id">

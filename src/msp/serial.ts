@@ -71,10 +71,18 @@ export class SerialTransport {
     while (this.port?.readable && !this.closing) {
       const reader = this.port.readable.getReader();
       this.reader = reader;
+      // A stream that ends cleanly means the device went away — a reboot into
+      // the bootloader, or an unplugged cable. Without this flag the outer loop
+      // would immediately take a new reader on the already-closed stream and
+      // spin forever.
+      let streamEnded = false;
       try {
         for (;;) {
           const { value, done } = await reader.read();
-          if (done) break;
+          if (done) {
+            streamEnded = true;
+            break;
+          }
           if (value?.length) this.onData(value);
         }
       } catch (error) {
@@ -90,6 +98,7 @@ export class SerialTransport {
         }
         this.reader = null;
       }
+      if (streamEnded) break;
     }
     if (!this.closing) this.onClose("Device disconnected");
   }
